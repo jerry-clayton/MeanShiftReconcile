@@ -1,9 +1,10 @@
 
 
+## Accept command line arguments for input LAS, tarball, and output file. 1st 2 are passed by user, 3rd is generated automatically in run.sh
 args <- commandArgs(trailingOnly = TRUE)
 input_las <- args[1]
-rds_dir <- args[2]
-output_file <- paste0(input_las,".rds")
+tarfile <- args[2]
+output_file <- args[3]
 
 library(lidR)
 library(MeanShiftR)
@@ -12,65 +13,63 @@ library(sf)
 library(plyr)
 
 print(paste("input las:",input_las))
-print(paste("rds dir:",rds_dir))
+print(paste("tarball:",tarfile))
 
 # use all available processor cores
 set_lidr_threads(0)
 
-#####
-##   Begin function definitions for merging
-#####
+# Unpack the tarball into a temp directory and print filenames
+extract_dir <- tempdir()
+untar(tarfile, exdir = extract_dir)
+filenames <- Sys.glob(paste0(extract_dir,"/*"))
 
-globstr <- paste0(rds_dir,"*.rds")
-filenames <- Sys.glob(globstr)
+print(paste("RDS files found:", length(filenames)))
+for (f in filenames){
+    print(f)
+    }
 
-print(paste("RDS files found:", length(filenames))
-
-###
-##   Begin reconciliation
-###
-
-# read header and file separately so that we can save the LAS later
+##  Read header and file separately so that we can save the LAS later
 f_head <- readLASheader(input_las)
 f_las <- readLAS(input_las)
 
 # convert LAS to data.table for MeanShiftR package
-f_dt <- lidR::payload(f_las) %>% as.data.table
+las_dt <- lidR::payload(f_las) %>% as.data.table
 
-# read in all RDS files
-pc.list <- list()
+# read in all segmented tiles to one list
+pc.list <- vector("list",length(filenames))
+
 for(file in 1:length(filenames)){
-    curr <- readRDS(filenames[file])
-    pc.list <- append(pc.list, curr)
+    curr <- as.data.table(readRDS(filenames[file]))
+    pc.list[[file]] <- curr
     }
-      
-    full.dt <- data.table::rbindlist(pc.list)
+# combine tiles
+    ms_result <- data.table::rbindlist(pc.list)
     print('data tables combined')
-    
-    full.dt[ , ID := .GRP, by = .(RoundCtrX, RoundCtrY, RoundCtrZ)]
+# Generate IDs
+    ms_result[ , ID := .GRP, by = .(RoundCtrX, RoundCtrY, RoundCtrZ)]
     print("IDs generated")
-    save_rds(full.dt, output_file)
-    # print("joining ms result to original data")
+
+    print("joining ms result to original data")
      
-    # # make IDs from xyz coords
-    #  f_dt[, concat := paste(X,Y,Z, sep = "_")]
-    #  ms_result[, concat := paste(X,Y,Z, sep = "_")]
+    # make merging IDs (for points, not trees) from xyz coords, store in variable 'concat'
+     las_dt[, concat := paste(X,Y,Z, sep = "_")]
+     ms_result[, concat := paste(X,Y,Z, sep = "_")]
 
-    #  ms_result[, ID := ID]
-    #  # left join (update-by-reference-join) (stackoverflow)
-    #  # adds treeID to original lidR payload
+     ms_result[, ID := ID]
+     # left join (update-by-reference-join) (stackoverflow)
+     # adds treeID to original lidR payload ONLY for those points with IDs
 
-    #  f_dt[ms_result, on = "concat", ID := ID]
+     las_dt[ms_result, on = "concat", ID := ID]
  
-    #  # save meanshift-generated IDs to LAS format
-    #  # specifically: use original header with updated data and then force the header to update with add_lasattribute_manual()
-    #  flas <- LAS(f_dt, f_head)
-    #  flas <- add_lasattribute_manual(flas, f_dt[,ID], name = "ID", desc = "tree ID", type = "int64", NA_value = 99999)
+     # save meanshift-generated IDs to LAS format
 
+     # specifically: use original header with updated data and then force the header to update with add_lasattribute_manual()
+     flas <- LAS(las_dt, f_head)
+     flas <- add_lasattribute_manual(flas, las_dt[,ID], name = "ID", desc = "tree ID", type = "int64", NA_value = 99999) ## 99999 is nodata value because 0 might be a valid ID
 
-    #  writeLAS(flas, output_file)
+     writeLAS(flas, output_file)
 
-    #  print("segmented las written")
+     print("segmented las written")
 
 ##### 
 ##   End Reconciliation
