@@ -19,6 +19,8 @@ if [[ $? -ne 0 ]]; then
   exit 1
 fi
 
+mkdir -p output
+
 parent_path=$(realpath .)
 input_dir="$parent_path/input/"
 #get LAS file
